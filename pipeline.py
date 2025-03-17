@@ -22,7 +22,7 @@ def get_sp500_data():
             "Ticker": t.replace(".", "-"),
             "Name": n,
             "Industry": ind,
-            "Sub_industry": sub,
+            "Sub_Industry": sub,
         }
         for t, n, ind, sub in zip(
             sp500["Symbol"],
@@ -47,10 +47,24 @@ def fetch_ticker_data(ticker: str, start_date: str, end_date: str) -> pd.DataFra
     Returns:
         pd.DataFrame: A DataFrame containing historical stock data for the given ticker.
     """
-    data = yf.download(tickers=ticker, start=start_date, end=end_date, interval="1d", threads=True)
-    data = data.reset_index()
-    data.columns = [col[0] for col in data.columns]
-    data['Ticker'] = ticker
+    try:
+        # download historical ticker data
+        data = yf.download(
+            tickers=ticker, 
+            start=start_date, 
+            end=end_date, 
+            interval="1d", 
+            threads=True, 
+            auto_adjust=False,
+            multi_level_index=False,
+        ).reset_index()
+
+        # add ticker column
+        data['Ticker'] = ticker
+
+    except Exception as e:
+        print(f"Error downloading {ticker}: {e}")
+        data=pd.DataFrame()
 
     return data
 
@@ -64,8 +78,10 @@ def combine_stock_data(ticker_data_dict: dict, ticker_df: pd.DataFrame) -> pd.Da
         ticker_data_dict (dict): Dictionary of Ticker data. This includes Industry and sub-industry.
         ticker_df (pd.DataFrame): DataFrame of historical ticker data.
     """
+    # convert ticker_data_dict to a DataFrame and Transpose it, while dropping unecessary index
     ticker_data_dict_df = pd.DataFrame(ticker_data_dict).T.reset_index(drop=True)
 
+    # merge DataFrames together
     combined_df = pd.merge(ticker_data_dict_df, ticker_df, how="right", on="Ticker")
 
     return combined_df
@@ -80,7 +96,7 @@ def save_stock_data(ticker: str, full_df: pd.DataFrame, output_path: str) -> Non
         full_df (pd.DataFrame): DataFrame after being combined using combine_stock_data.
         output_path (str): output directory for storing data.
     """
-    # Create directory if it doesn't exist
+    # create directory if it doesn't exist
     os.makedirs(output_path, exist_ok=True)
 
     full_file_path = os.path.join(output_path, f"{ticker}.csv")
@@ -88,24 +104,25 @@ def save_stock_data(ticker: str, full_df: pd.DataFrame, output_path: str) -> Non
 
 
 if __name__ == "__main__":
-    # get S&P 500 data
-    sp_500 = get_sp500_data()
-
-    # check first ticker symbol
-    first_ticker = list(sp_500.keys())[0]
-    print(f"Stock: {first_ticker}")
-
     # find today and look back dates
     today = datetime.today()
     look_back = today - relativedelta(months=6)
 
-    # convert to strings
+    # convert to today and look back dates to strings
     today = today.strftime("%Y-%m-%d")
     look_back = look_back.strftime("%Y-%m-%d")
 
-    # fetch stock data for first ticker
-    df = fetch_ticker_data(ticker=first_ticker, start_date=look_back, end_date=today)
+    # get S&P 500 data
+    sp_500 = get_sp500_data()
 
-    combined_df = combine_stock_data(ticker_data_dict=sp_500, ticker_df=df)
+    for ticker in list(sp_500.keys()):
+        print(f"Ticker: {ticker}")
 
-    save_stock_data(first_ticker, full_df=combined_df, output_path="data/")
+        df = fetch_ticker_data(ticker=ticker, start_date=look_back, end_date=today)
+
+        combined_df = combine_stock_data(ticker_data_dict=sp_500, ticker_df=df)
+
+        save_stock_data(ticker, full_df=combined_df, output_path="data/")
+
+    print("S&P 500 stocks download complete!")
+
