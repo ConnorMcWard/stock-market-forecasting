@@ -1,0 +1,22 @@
+version: '3'
+services:
+  data-prep:
+    build: .
+    command: python scripts/data_preparation.py
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+  model-train:
+    build: .
+    command: python scripts/model_retraining.py
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+  visualization:
+    build: .
+    command: streamlit run scripts/visualization.py
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
