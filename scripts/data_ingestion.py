@@ -8,7 +8,7 @@ from dateutil.relativedelta import relativedelta
 
 def get_sp500_data():
     """
-    Fetch S&P 500 tickers and industry data from Wikipedia.
+    Fetch S&P 500 tickers and metadata from Wikipedia.
 
     Returns:
         dict: A dictionary mapping ticker symbols (str) to their industry data.
@@ -35,25 +35,25 @@ def get_sp500_data():
     return ticker_data_dict
 
 
-def fetch_ticker_data(ticker: str, start_date: str, end_date: str) -> pd.DataFrame:
+def fetch_ticker_data(ticker: str, period: str) -> pd.DataFrame:
     """
     Download historical stock data from Yahoo Finance.
 
     Args:
         ticker (str): Stock ticker symbol.
-        start_date (str): Start date for the data (YYYY-MM-DD).
-        end_date (str): End date for the data (YYYY-MM-DD).
+        period (str): How far to look back from last available trading day. \n
+                        Valid periods: 1d,5d,1mo,3mo,6mo,1y,2y,5y,10y,ytd,max
 
     Returns:
-        pd.DataFrame: A DataFrame containing historical stock data for the given ticker.
+        data (pd.DataFrame): A DataFrame containing historical stock data for the given ticker.
     """
     try:
         # download historical ticker data
         data = yf.download(
             tickers=ticker, 
-            start=start_date, 
-            end=end_date, 
-            interval="1d", 
+            period=period,
+            interval="1d",
+            actions=True, 
             threads=True, 
             auto_adjust=False,
             multi_level_index=False,
@@ -71,7 +71,7 @@ def fetch_ticker_data(ticker: str, start_date: str, end_date: str) -> pd.DataFra
 
 def combine_stock_data(ticker_data_dict: dict, ticker_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Combine historical ticker data with industry and subindustry.
+    Combine historical ticker data with industry and subindustry metadata.
 
     Args:
         ticker (str): Stock ticker symbol.
@@ -89,7 +89,7 @@ def combine_stock_data(ticker_data_dict: dict, ticker_df: pd.DataFrame) -> pd.Da
 
 def save_stock_data(ticker: str, full_df: pd.DataFrame, output_path: str) -> None:
     """
-    Save historical and descriptive stock data to data output folder for model training
+    Save metadata and historical stock data to data output folder for model training
 
     Args:
         ticker (str): Stock ticker symbol.
@@ -104,25 +104,17 @@ def save_stock_data(ticker: str, full_df: pd.DataFrame, output_path: str) -> Non
 
 
 if __name__ == "__main__":
-    # find today and look back dates
-    today = datetime.today()
-    look_back = today - relativedelta(months=6)
-
-    # convert to today and look back dates to strings
-    today = today.strftime("%Y-%m-%d")
-    look_back = look_back.strftime("%Y-%m-%d")
-
     # get S&P 500 data
     sp_500 = get_sp500_data()
 
     for ticker in list(sp_500.keys()):
         print(f"Ticker: {ticker}")
 
-        df = fetch_ticker_data(ticker=ticker, start_date=look_back, end_date=today)
+        df = fetch_ticker_data(ticker=ticker, period='2y')
 
         combined_df = combine_stock_data(ticker_data_dict=sp_500, ticker_df=df)
 
-        save_stock_data(ticker, full_df=combined_df, output_path="data/")
+        save_stock_data(ticker, full_df=combined_df, output_path="data/input/")
 
     print("S&P 500 stocks download complete!")
 
