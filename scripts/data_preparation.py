@@ -1,69 +1,85 @@
-# scripts/data_preparation.py
 import os
 import glob
-import pandas as pd
 import numpy as np
-import pickle
+import pandas as pd
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from multiprocessing import Pool, cpu_count
+import json
 
-def load_and_concat_data(data_folder):
-    csv_files = glob.glob(os.path.join(data_folder, "*.csv"))
-    df_list = [pd.read_csv(file) for file in csv_files]
-    return pd.concat(df_list, ignore_index=True)
 
-def prepare_data(df, window_size=10):
-    # Convert Date column and sort
-    df["Date"] = pd.to_datetime(df["Date"])
-    df = df.sort_values(by=["Ticker", "Date"])
+# Define paths dynamically
+BASE_DIR = os.getenv("DATA_DIR", os.path.abspath("data"))
+RAW_DATA_PATH = os.path.join(BASE_DIR, "input")
+PROCESSED_DATA_PATH = os.path.join(BASE_DIR, "processed")
 
-    # One-hot encode static features
-    static_features = df[["Ticker", "Industry", "Sub_Industry"]].drop_duplicates()
-    encoder = OneHotEncoder(sparse=False, handle_unknown="ignore")
-    encoded_static = encoder.fit_transform(static_features)
-    static_columns = encoder.get_feature_names_out(["Ticker", "Industry", "Sub_Industry"])
-    static_features_df = pd.DataFrame(encoded_static, columns=static_columns)
-    static_features_df["Ticker"] = static_features["Ticker"].values
+# Ensure output directory exists
+os.makedirs(PROCESSED_DATA_PATH, exist_ok=True)
 
-    sequences, targets, tickers = [], [], []
-    scalers_dict = {}
+# Get all CSV files
+csv_files = glob.glob(os.path.join(RAW_DATA_PATH, "*.csv"))
+if not csv_files:
+    raise FileNotFoundError(f"No CSV files found in {RAW_DATA_PATH}")
+
+# Load DataFrames efficiently using generators
+df_list = (pd.read_csv(file) for file in csv_files)
+full_df = pd.concat(df_list, ignore_index=True)
+
+# Extract and encode static features
+static_features = full_df[['Ticker', 'Industry', 'Sub_Industry']].drop_duplicates(subset=["Ticker"], keep="first")
+encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
+encoded_static = encoder.fit_transform(static_features[['Industry', 'Sub_Industry']])
+static_columns = list(encoder.get_feature_names_out(['Industry', 'Sub_Industry']))
+static_columns = [col.replace("Industry_", "Ind_").replace("Sub_Industry_", "SubInd_") for col in static_columns]
+static_features_df = pd.DataFrame(encoded_static, columns=static_columns)
+static_features_df['Ticker'] = static_features['Ticker'].values
+
+# Function to process a single ticker
+def process_ticker_and_save(ticker_data):
+    ticker, ticker_df, static_vector, window_size = ticker_data
     dynamic_features = ["Adj Close", "Close", "High", "Low", "Open", "Volume"]
 
-    for ticker, ticker_df in df.groupby("Ticker"):
-        scaler = StandardScaler()
-        train_data = ticker_df[dynamic_features].iloc[:-30]  # Avoid leakage
-        scaler.fit(train_data)
-        scalers_dict[ticker] = scaler
-
-        normalized_data = scaler.transform(ticker_df[dynamic_features])
-        ticker_df.loc[:, dynamic_features] = normalized_data
-
-        for i in range(len(ticker_df) - window_size):
-            seq = ticker_df.iloc[i:i + window_size][dynamic_features].values
-            target = ticker_df.iloc[i + window_size]["Adj Close"]
-            static_vector = static_features_df[static_features_df["Ticker"] == ticker]\
-                                .drop(columns=["Ticker"]).values.flatten()
-            seq_with_static = np.hstack([seq, np.tile(static_vector, (window_size, 1))])
-            sequences.append(seq_with_static)
-            targets.append(target)
-            tickers.append(ticker)
-
-    return np.array(sequences), np.array(targets), np.array(tickers), scalers_dict, static_features_df, df
-
-def main():
-    data_folder = "../data/input/"  # adjust path as needed
-    df = load_and_concat_data(data_folder)
-    X, y, tickers_array, scalers_dict, static_features_df, processed_df = prepare_data(df)
-    np.savez("processed_data.npz", X=X, y=y, tickers=tickers_array)
+    # Avoid data leakage: fit on training set only
+    scaler = StandardScaler()
+    train_idx = int(len(ticker_df) * 0.8)  # Use 80% for training
+    train_data = ticker_df[dynamic_features].iloc[:train_idx]
+    scaler.fit(train_data)
     
-    # Save scalers and static features for later use (e.g., in retraining and visualization)
-    with open("models/scalers_dict.pkl", "wb") as f:
-        pickle.dump(scalers_dict, f)
-    with open("models/static_features_df.pkl", "wb") as f:
-        pickle.dump(static_features_df, f)
-    
-    # Optionally, you could also save the processed_df with normalized values
-    processed_df.to_csv("data/processed_data.csv", index=False)
-    print("Data preparation complete.")
+    # Apply transformation
+    ticker_df[dynamic_features] = scaler.transform(ticker_df[dynamic_features])
 
+    # Create sliding windows
+    sequences, targets = [], []
+    for i in range(len(ticker_df) - window_size):
+        seq = ticker_df.iloc[i:i + window_size][dynamic_features].values
+        target = ticker_df.iloc[i + window_size]["Adj Close"]
+        static_repeated = np.tile(static_vector, (window_size, 1))
+        full_seq = np.hstack([seq, static_repeated])
+        sequences.append(full_seq)
+        targets.append(target)
+
+    # Save processed data
+    np.savez(os.path.join(PROCESSED_DATA_PATH, f"{ticker}_data.npz"), X=sequences, y=targets)
+
+# Parallelized processing
+def create_sliding_windows_parallel(ticker_groups, static_features_df, window_size=10):
+    ticker_data_list = []
+    for ticker, ticker_df in ticker_groups:
+        static_vector = static_features_df[static_features_df["Ticker"] == ticker].drop(columns=["Ticker"]).values.flatten()
+        ticker_data_list.append((ticker, ticker_df, static_vector, window_size))
+    
+    n_jobs = max(cpu_count() - 2, 1)  # Avoid overloading the CPU
+    with Pool(n_jobs) as pool:
+        pool.map(process_ticker_and_save, ticker_data_list)
+
+# Main execution
 if __name__ == "__main__":
-    main()
+    create_sliding_windows_parallel(full_df.groupby('Ticker'), static_features_df, window_size=10)
+    print(f"Preprocessing complete! Processed data saved in '{PROCESSED_DATA_PATH}'.")
+    
+    # Save static feature names to a JSON file
+    static_feature_names_path = os.path.join(PROCESSED_DATA_PATH, "static_feature_names.json")
+
+    with open(static_feature_names_path, "w") as f:
+        json.dump(static_columns, f)
+
+    print(f"Static feature names saved to {static_feature_names_path}")

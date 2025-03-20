@@ -1,9 +1,6 @@
 import yfinance as yf
 import pandas as pd
-import numpy as np
 import os
-from datetime import datetime
-from dateutil.relativedelta import relativedelta
 
 
 def get_sp500_data():
@@ -108,7 +105,7 @@ if __name__ == "__main__":
     sp_500 = get_sp500_data()
 
     for ticker in list(sp_500.keys()):
-        print(f"Ticker: {ticker}")
+        print(f"Downloading Ticker: {ticker}")
 
         df = fetch_ticker_data(ticker=ticker, period='2y')
 
